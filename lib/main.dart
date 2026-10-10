@@ -1,7 +1,11 @@
 import 'package:flutter/material.dart';
-import 'dashboard_screen.dart';
+import 'repositories/transaction_repository.dart';
+import 'screens/dashboard_screen.dart';
 
-void main() {
+Future<void> main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  // Đọc dữ liệu từ database trước khi hiện giao diện
+  await TransactionRepository.instance.load();
   runApp(const ExpenseManagerApp());
 }
 
@@ -67,7 +71,6 @@ class HomeScreen extends StatelessWidget {
                 width: double.infinity,
                 child: ElevatedButton(
                   onPressed: () {
-                    // Mở màn hình chính (Dashboard).
                     // pushReplacement: bấm Back sẽ không quay lại màn hình chào.
                     Navigator.of(context).pushReplacement(
                       MaterialPageRoute(

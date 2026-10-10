@@ -1,93 +1,69 @@
 import 'package:flutter/material.dart';
+import '../repositories/transaction_repository.dart';
+import '../models/transaction_category.dart';
+import '../models/transaction_model.dart';
+import '../utils/formatters.dart';
 
-/// Model đơn giản cho 1 danh mục chi tiêu / thu nhập
-class TransactionCategory {
-  final String name;
-  final IconData icon;
-  final Color color;
-
-  const TransactionCategory({
-    required this.name,
-    required this.icon,
-    required this.color,
-  });
-}
-
-/// Màn hình Thêm / Sửa giao dịch
-/// - Nếu [initialData] == null  => hiển thị "Thêm giao dịch"
-/// - Nếu [initialData] != null  => hiển thị "Sửa giao dịch" và điền sẵn dữ liệu
-class AddEditTransactionScreen extends StatefulWidget {
-  final Map<String, dynamic>? initialData;
-
-  const AddEditTransactionScreen({super.key, this.initialData});
+/// Màn hình Thêm giao dịch
+class AddTransactionScreen extends StatelessWidget {
+  const AddTransactionScreen({super.key});
 
   @override
-  State<AddEditTransactionScreen> createState() =>
-      _AddEditTransactionScreenState();
+  Widget build(BuildContext context) {
+    return TransactionFormScreen(
+      title: 'Thêm giao dịch',
+      onSave: TransactionRepository.instance.add,
+    );
+  }
 }
 
-class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
+/// Form dùng chung cho Thêm / Sửa giao dịch.
+/// - [initial] == null => form trống (ngày mặc định là hôm nay)
+/// - [initial] != null => điền sẵn dữ liệu
+/// Bấm "Lưu" => kiểm tra hợp lệ, gọi [onSave] rồi đóng màn hình.
+class TransactionFormScreen extends StatefulWidget {
+  final String title;
+  final TransactionModel? initial;
+  final Future<void> Function(TransactionModel) onSave;
+
+  const TransactionFormScreen({
+    super.key,
+    required this.title,
+    required this.onSave,
+    this.initial,
+  });
+
+  @override
+  State<TransactionFormScreen> createState() => _TransactionFormScreenState();
+}
+
+class _TransactionFormScreenState extends State<TransactionFormScreen> {
   // true = Chi tiêu, false = Thu nhập
   bool isExpense = true;
-
-  final List<TransactionCategory> categories = const [
-    TransactionCategory(
-      name: 'Ăn uống',
-      icon: Icons.restaurant,
-      color: Color(0xFFF59E0B),
-    ),
-    TransactionCategory(
-      name: 'Di chuyển',
-      icon: Icons.directions_bus,
-      color: Color(0xFF3B82F6),
-    ),
-    TransactionCategory(
-      name: 'Mua sắm',
-      icon: Icons.shopping_bag,
-      color: Color(0xFFEC4899),
-    ),
-    TransactionCategory(
-      name: 'Hóa đơn',
-      icon: Icons.receipt_long,
-      color: Color(0xFF10B981),
-    ),
-    TransactionCategory(
-      name: 'Khác',
-      icon: Icons.more_horiz,
-      color: Color(0xFF64748B),
-    ),
-  ];
-
   late TransactionCategory selectedCategory;
-  final TextEditingController amountController = TextEditingController();
-  final TextEditingController dateController = TextEditingController();
-  final TextEditingController noteController = TextEditingController();
+  late DateTime selectedDate;
+  String? amountError;
 
-  bool get isEditing => widget.initialData != null;
+  final amountController = TextEditingController();
+  final dateController = TextEditingController();
+  final noteController = TextEditingController();
 
   @override
   void initState() {
     super.initState();
-    selectedCategory = categories.first;
-
-    final data = widget.initialData;
-    if (data != null) {
-      isExpense = data['isExpense'] ?? true;
-      amountController.text = data['amount']?.toString() ?? '';
-      dateController.text = data['date']?.toString() ?? '';
-      noteController.text = data['note']?.toString() ?? '';
-      final catName = data['category'];
-      if (catName != null) {
-        selectedCategory = categories.firstWhere(
-          (c) => c.name == catName,
-          orElse: () => categories.first,
-        );
-      }
+    final t = widget.initial;
+    if (t != null) {
+      isExpense = t.isExpense;
+      selectedCategory =
+          TransactionCategory.find(t.category, isExpense: t.isExpense);
+      selectedDate = t.date;
+      amountController.text = t.amount.toString();
+      noteController.text = t.note;
     } else {
-      final now = DateTime.now();
-      dateController.text =
-          '${now.day.toString().padLeft(2, '0')}/${now.month.toString().padLeft(2, '0')}/${now.year}';
+      selectedCategory = TransactionCategory.forType(isExpense).first;
+      selectedDate = DateTime.now();
     }
+    dateController.text = formatDate(selectedDate);
   }
 
   @override
@@ -98,31 +74,76 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
     super.dispose();
   }
 
+  /// Đổi loại Chi tiêu / Thu nhập => đổi danh mục cho phù hợp
+  void _setType(bool expense) {
+    setState(() {
+      isExpense = expense;
+      final list = TransactionCategory.forType(expense);
+      if (!list.any((c) => c.name == selectedCategory.name)) {
+        selectedCategory = list.first;
+      }
+    });
+  }
+
   Future<void> _pickDate() async {
     final now = DateTime.now();
     final picked = await showDatePicker(
       context: context,
-      initialDate: now,
-      firstDate: DateTime(now.year - 5),
+      initialDate: selectedDate,
+      firstDate: DateTime(2000),
       lastDate: DateTime(now.year + 5),
     );
     if (picked != null) {
       setState(() {
-        dateController.text =
-            '${picked.day.toString().padLeft(2, '0')}/${picked.month.toString().padLeft(2, '0')}/${picked.year}';
+        selectedDate = picked;
+        dateController.text = formatDate(picked);
       });
     }
   }
 
-  void _save() {
-    final result = {
-      'isExpense': isExpense,
-      'category': selectedCategory.name,
-      'amount': amountController.text,
-      'date': dateController.text,
-      'note': noteController.text,
-    };
-    Navigator.of(context).pop(result);
+  Future<void> _save() async {
+    final digits = amountController.text.replaceAll(RegExp(r'[^0-9]'), '');
+    final amount = int.tryParse(digits) ?? 0;
+    if (amount <= 0) {
+      setState(() => amountError = 'Vui lòng nhập số tiền hợp lệ');
+      return;
+    }
+    await widget.onSave(
+      TransactionModel(
+        id: widget.initial?.id ?? '',
+        isExpense: isExpense,
+        category: selectedCategory.name,
+        amount: amount,
+        date: selectedDate,
+        note: noteController.text.trim(),
+      ),
+    );
+    if (!mounted) return;
+    Navigator.of(context).pop();
+  }
+
+  InputDecoration _decoration({
+    String? hint,
+    String? suffixText,
+    Widget? suffixIcon,
+    String? error,
+  }) {
+    const borderColor = Color(0xFFE2E8F0);
+    OutlineInputBorder border(Color c) => OutlineInputBorder(
+          borderRadius: BorderRadius.circular(12),
+          borderSide: BorderSide(color: c),
+        );
+    return InputDecoration(
+      hintText: hint,
+      hintStyle: const TextStyle(color: Color(0xFF94A3B8)),
+      suffixText: suffixText,
+      suffixIcon: suffixIcon,
+      errorText: error,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      border: border(borderColor),
+      enabledBorder: border(borderColor),
+      focusedBorder: border(const Color(0xFF1967D2)),
+    );
   }
 
   @override
@@ -131,7 +152,7 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
     const labelColor = Color(0xFF0F172A);
     const hintColor = Color(0xFF94A3B8);
     const borderColor = Color(0xFFE2E8F0);
-    const expenseColor = Color(0xFFEF4444); // đỏ - Chi tiêu
+    const expenseColor = Color(0xFFEF4444);
     const primaryBlue = Color(0xFF1967D2);
 
     return Scaffold(
@@ -145,7 +166,7 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
           onPressed: () => Navigator.of(context).maybePop(),
         ),
         title: Text(
-          isEditing ? 'Sửa giao dịch' : 'Thêm giao dịch',
+          widget.title,
           style: const TextStyle(
             color: labelColor,
             fontWeight: FontWeight.w700,
@@ -173,7 +194,7 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
                         label: 'Chi tiêu',
                         selected: isExpense,
                         selectedColor: expenseColor,
-                        onTap: () => setState(() => isExpense = true),
+                        onTap: () => _setType(true),
                       ),
                     ),
                     Expanded(
@@ -181,7 +202,7 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
                         label: 'Thu nhập',
                         selected: !isExpense,
                         selectedColor: primaryBlue,
-                        onTap: () => setState(() => isExpense = false),
+                        onTap: () => _setType(false),
                       ),
                     ),
                   ],
@@ -200,7 +221,9 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
                     shape: const RoundedRectangleBorder(
                       borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                     ),
-                    builder: (ctx) => _CategoryPicker(categories: categories),
+                    builder: (_) => _CategoryPicker(
+                      categories: TransactionCategory.forType(isExpense),
+                    ),
                   );
                   if (picked != null) {
                     setState(() => selectedCategory = picked);
@@ -240,25 +263,14 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
               TextField(
                 controller: amountController,
                 keyboardType: TextInputType.number,
+                onChanged: (_) {
+                  if (amountError != null) setState(() => amountError = null);
+                },
                 style: const TextStyle(fontSize: 15, color: labelColor),
-                decoration: InputDecoration(
-                  hintText: 'Nhập số tiền',
-                  hintStyle: const TextStyle(color: hintColor),
+                decoration: _decoration(
+                  hint: 'Nhập số tiền',
                   suffixText: 'đ',
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: borderColor),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: borderColor),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: primaryBlue),
-                  ),
+                  error: amountError,
                 ),
               ),
               const SizedBox(height: 20),
@@ -271,25 +283,10 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
                 readOnly: true,
                 onTap: _pickDate,
                 style: const TextStyle(fontSize: 15, color: labelColor),
-                decoration: InputDecoration(
-                  hintText: 'dd/mm/yyyy',
-                  hintStyle: const TextStyle(color: hintColor),
+                decoration: _decoration(
+                  hint: 'dd/mm/yyyy',
                   suffixIcon: const Icon(Icons.calendar_today_outlined,
                       size: 18, color: hintColor),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: borderColor),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: borderColor),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: primaryBlue),
-                  ),
                 ),
               ),
               const SizedBox(height: 20),
@@ -301,24 +298,7 @@ class _AddEditTransactionScreenState extends State<AddEditTransactionScreen> {
                 controller: noteController,
                 maxLines: 2,
                 style: const TextStyle(fontSize: 15, color: labelColor),
-                decoration: InputDecoration(
-                  hintText: 'Nhập ghi chú (tùy chọn)',
-                  hintStyle: const TextStyle(color: hintColor),
-                  contentPadding:
-                      const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: borderColor),
-                  ),
-                  enabledBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: borderColor),
-                  ),
-                  focusedBorder: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(12),
-                    borderSide: const BorderSide(color: primaryBlue),
-                  ),
-                ),
+                decoration: _decoration(hint: 'Nhập ghi chú (tùy chọn)'),
               ),
               const SizedBox(height: 32),
 
